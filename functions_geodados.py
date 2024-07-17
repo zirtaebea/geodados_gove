@@ -172,6 +172,7 @@ def coordenada_numero_porta(caminho_pc, df):
             resultado_com_coord = row.copy()
             resultado_com_coord['x_gove'] = coordenada_final[0]
             resultado_com_coord['y_gove'] = coordenada_final[1]
+            # se o imóvel tiver coordenada
             resultado_com_coord['diferenca_x'] = (resultado_com_coord['x_gove'] - resultado_com_coord['coordenada_x'])
             resultado_com_coord['diferenca_y'] = (resultado_com_coord['y_gove'] - resultado_com_coord['coordenada_y'])
             resultados.append(resultado_com_coord)
