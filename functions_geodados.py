@@ -7,6 +7,7 @@ import requests
 import pandas as pd
 import urllib.parse
 import folium
+import re
 
 
 # Endereço por número do cep
@@ -74,7 +75,8 @@ def verifica_metragem_log_e_numero_porta(cep, numero, usuario):
                     print(f'Número de porta {
                         numero} é válido para o comprimento do logradouro')
             else:
-                print(f"Não foi possível encontrar a {rua} em {endereco_completo}")
+                print(f"Não foi possível encontrar a {
+                      rua} em {endereco_completo}")
         else:
             print("Não foi possível obter as coordenadas para o endereço")
     else:
@@ -100,7 +102,8 @@ def verifica_log_cep(uf, cidade, nome_rua):
                 resultados_ceps.append(resultado)
             return resultados_ceps
         else:
-            print(f"Não foi possível encontrar o CEP para {nome_rua}, {cidade}.")
+            print(f"Não foi possível encontrar o CEP para {
+                  nome_rua}, {cidade}.")
             return None
     except requests.exceptions.RequestException as req_err:
         print(f'Erro de requisição ao consultar CEP: {req_err}')
@@ -112,56 +115,81 @@ def verifica_log_cep(uf, cidade, nome_rua):
 # função auxiliar da coordenada_numero_porta
 # Inverter ordem das cooordenadas
 def inverter_coordenadas(geom):
-    if geom.geom_type == 'LineString':
+    if geom and geom.geom_type == 'LineString':
         coords_invertidas = [(p[1], p[0]) for p in geom.coords]
         return LineString(coords_invertidas)
     else:
         return geom
-
+# for codlog in coluna_log
+#   logradouro ssa_eixos[ssa_eixos['CodLog'] == codlog]
 
 # Coordenadas de acordo com a extensão do shp do logradouro e número de porta
-def coordenada_numero_porta(caminho_pc, codlog, numero):
+
+
+def coordenada_numero_porta(caminho_pc, df):
     # abrindo shapefile pelo caminho do arquivo
     ssa_eixos = gpd.read_file(caminho_pc, crs='EPSG:31984')
-    
-    # extraindo logradouro desejado
-    logradouro = ssa_eixos[ssa_eixos['CodLog'] == codlog]
-    
-    # convertendo para lat_long
-    logradouro = logradouro.to_crs('EPSG: 4326')
+    resultados = []
 
-    # invertendo coordenadas para visualização
-    gdf_coord_invertido = logradouro.copy()
-    gdf_coord_invertido['geometry'] = logradouro['geometry'].apply(
-        inverter_coordenadas)
-    
-    # geodataframe em utm
-    logradouro_utm = logradouro.to_crs('EPSG:31984')
+    for index, row in df.iterrows():
+        print(f"Processando linha {index}...")
+        codlog = row['cod._logradouro_localização']
+        codlog = int(re.sub(r'-\d+', '', codlog))
 
-    # transformando distância nº métrico compatível a unidade de medida do logradouro
-    distancia_em_metros = (numero)/100000
+        # convertendo para lat_long
+        logradouro = ssa_eixos[ssa_eixos['CodLog'] == codlog]
+        logradouro = logradouro.to_crs('EPSG: 4326')
+        
+        if logradouro.empty:
+            print(f"Logradouro {codlog} não encontrado no shapefile.") 
+            continue
+        # invertendo coordenadas para visualização
+        gdf_coord_invertido = logradouro.copy()
+        gdf_coord_invertido['geometry'] = logradouro['geometry'].apply(
+            inverter_coordenadas)
 
-    # interpolando a distância conforme a distância do número métrico do início do logradouro
-    # em lat long para visualizar
-    interpolacao = gdf_coord_invertido.interpolate(distancia_em_metros)
-    
-    # em utm
-    interpolacao_utm = logradouro_utm.interpolate(distancia_em_metros)
-    coordenada_final = (round(interpolacao_utm.geometry.x.iloc[0], 3), round(
-        interpolacao_utm.geometry.y.iloc[0], 3))
+        # geodataframe em utm
+        logradouro_utm = logradouro.to_crs('EPSG:31984')
+
+        # transformando distância nº métrico compatível a unidade de medida do logradouro
+        numero = row['nº_métrico_localização']
+        distancia_em_metros = (numero)/100000
+        # interpolando a distância conforme a distância do número métrico do início do logradouro
+        # em lat long para visualizar
+        # interpolacao = gdf_coord_invertido.interpolate(distancia_em_metros)
+
+        # em utm
+        interpolacao_utm = logradouro_utm.interpolate(distancia_em_metros)
+        if interpolacao_utm.empty:
+            continue
+        
+        try:
+            coordenada_final = (round(interpolacao_utm.geometry.x.iloc[0], 3), 
+                                round(interpolacao_utm.geometry.y.iloc[0], 3))
+            
+            resultado_com_coord = row.copy()
+            resultado_com_coord['x_gove'] = coordenada_final[0]
+            resultado_com_coord['y_gove'] = coordenada_final[1]
+            resultado_com_coord['diferenca_x'] = (resultado_com_coord['x_gove'] - resultado_com_coord['coordenada_x'])
+            resultado_com_coord['diferenca_y'] = (resultado_com_coord['y_gove'] - resultado_com_coord['coordenada_y'])
+            resultados.append(resultado_com_coord)
+        except IndexError:
+            continue
+
+    return resultados
 
     # para visualizar no mapa
-    lat_long = interpolacao.to_crs('EPSG: 4326')
-    coordenada_lat_long = (
-        lat_long.geometry.x.iloc[0], lat_long.geometry.y.iloc[0])
-    mapa_ssa = folium.Map(location=[coordenada_lat_long[0], coordenada_lat_long[1]],
-                        zoom_start=12,
-                        tiles='OpenStreetMap',
-                        name='Stamen')
-    folium.Marker([coordenada_lat_long[0], coordenada_lat_long[1]],
-                popup=f'Localização Interpolada: {logradouro['Toponim']}, número {numero}').add_to(mapa_ssa)
+    # lat_long = interpolacao.to_crs('EPSG: 4326')
+    # coordenada_lat_long = (
+    #     lat_long.geometry.x.iloc[0], lat_long.geometry.y.iloc[0])
+    # mapa_ssa = folium.Map(location=[coordenada_lat_long[0], coordenada_lat_long[1]],
+    #                     zoom_start=12,
+    #                     tiles='OpenStreetMap',
+    #                     name='Stamen')
+    # folium.Marker([coordenada_lat_long[0], coordenada_lat_long[1]],
+    #             popup=f'Localização Interpolada: {logradouro['Toponim']}, número {numero}').add_to(mapa_ssa)
 
-    # salva o mapa em um arquivo HTML para visualização
-    mapa_ssa.save('mapa_ssa.html')
+    # # salva o mapa em um arquivo HTML para visualização
+    # mapa_ssa.save('mapa_ssa.html')
 
-    return coordenada_final
+    # return coordenada_final
