@@ -152,16 +152,17 @@ def coordenada_numero_porta(caminho_pc, df):
         logradouro_utm = logradouro.to_crs('EPSG:31984')
 
         # transformando distância nº métrico compatível a unidade de medida do logradouro
-        numero = row['nº_métrico_localização']
+        numero = row['nº_métrico_localização'] # numero = row['nº_porta_localização'] (caso seja utilizado o código com número de porta sem alfanumérico)
         distancia_em_metros = (numero)/100000
-        # interpolando a distância conforme a distância do número métrico do início do logradouro
+        
+        # interpolando a distância conforme a distância do número métrico/porta do início do logradouro
         # em lat long para visualizar
         # interpolacao = gdf_coord_invertido.interpolate(distancia_em_metros)
 
         # em utm
         interpolacao_utm = logradouro_utm.interpolate(distancia_em_metros)
         if interpolacao_utm.empty:
-            print(f"Número de porta maior que o comprimento do logradouro encontrado no shapefile.") 
+            print("Número de porta não encontrado no logradouro encontrado no shapefile.") 
             continue
         
         try:
@@ -178,19 +179,3 @@ def coordenada_numero_porta(caminho_pc, df):
             continue
 
     return resultados
-
-    # para visualizar no mapa
-    # lat_long = interpolacao.to_crs('EPSG: 4326')
-    # coordenada_lat_long = (
-    #     lat_long.geometry.x.iloc[0], lat_long.geometry.y.iloc[0])
-    # mapa_ssa = folium.Map(location=[coordenada_lat_long[0], coordenada_lat_long[1]],
-    #                     zoom_start=12,
-    #                     tiles='OpenStreetMap',
-    #                     name='Stamen')
-    # folium.Marker([coordenada_lat_long[0], coordenada_lat_long[1]],
-    #             popup=f'Localização Interpolada: {logradouro['Toponim']}, número {numero}').add_to(mapa_ssa)
-
-    # # salva o mapa em um arquivo HTML para visualização
-    # mapa_ssa.save('mapa_ssa.html')
-
-    # return coordenada_final
