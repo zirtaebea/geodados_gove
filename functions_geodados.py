@@ -161,6 +161,7 @@ def coordenada_numero_porta(caminho_pc, df):
         # em utm
         interpolacao_utm = logradouro_utm.interpolate(distancia_em_metros)
         if interpolacao_utm.empty:
+            print(f"Número de porta maior que o comprimento do logradouro encontrado no shapefile.") 
             continue
         
         try:
