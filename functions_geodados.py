@@ -1,6 +1,6 @@
 from geopy.geocoders import Nominatim
 import geopandas as gpd
-from shapely.geometry import Point, LineString
+from shapely.geometry import Point, LineString, Polygon
 import osmnx as ox
 import brazilcep
 import requests
@@ -139,9 +139,9 @@ def coordenada_numero_porta(caminho_pc, df):
         # convertendo para lat_long
         logradouro = ssa_eixos[ssa_eixos['CodLog'] == codlog]
         logradouro = logradouro.to_crs('EPSG: 4326')
-        
+
         if logradouro.empty:
-            print(f"Logradouro {codlog} não encontrado no shapefile.") 
+            print(f"Logradouro {codlog} não encontrado no shapefile.")
             continue
         # invertendo coordenadas para visualização
         gdf_coord_invertido = logradouro.copy()
@@ -152,31 +152,157 @@ def coordenada_numero_porta(caminho_pc, df):
         logradouro_utm = logradouro.to_crs('EPSG:31984')
 
         # transformando distância nº métrico compatível a unidade de medida do logradouro
-        numero = row['nº_métrico_localização'] # numero = row['nº_porta_localização'] (caso seja utilizado o código com número de porta sem alfanumérico)
+        numero = row['nº_métrico_localização']
         distancia_em_metros = (numero)/100000
-        
-        # interpolando a distância conforme a distância do número métrico/porta do início do logradouro
+        # interpolando a distância conforme a distância do número métrico do início do logradouro
         # em lat long para visualizar
         # interpolacao = gdf_coord_invertido.interpolate(distancia_em_metros)
 
         # em utm
         interpolacao_utm = logradouro_utm.interpolate(distancia_em_metros)
         if interpolacao_utm.empty:
-            print("Número de porta não encontrado no logradouro encontrado no shapefile.") 
+            print(
+                f"Número de porta maior que o comprimento do logradouro encontrado no shapefile.")
             continue
-        
+
         try:
-            coordenada_final = (round(interpolacao_utm.geometry.x.iloc[0], 3), 
+            coordenada_final = (round(interpolacao_utm.geometry.x.iloc[0], 3),
                                 round(interpolacao_utm.geometry.y.iloc[0], 3))
-            
+
             resultado_com_coord = row.copy()
             resultado_com_coord['x_gove'] = coordenada_final[0]
             resultado_com_coord['y_gove'] = coordenada_final[1]
-            # se o imóvel tiver coordenada
-            resultado_com_coord['diferenca_x'] = (resultado_com_coord['x_gove'] - resultado_com_coord['coordenada_x'])
-            resultado_com_coord['diferenca_y'] = (resultado_com_coord['y_gove'] - resultado_com_coord['coordenada_y'])
+            resultado_com_coord['diferenca_x'] = (
+                resultado_com_coord['x_gove'] - resultado_com_coord['coordenada_x'])
+            resultado_com_coord['diferenca_y'] = (
+                resultado_com_coord['y_gove'] - resultado_com_coord['coordenada_y'])
             resultados.append(resultado_com_coord)
         except IndexError:
             continue
 
     return resultados
+
+    # para visualizar no mapa
+    # lat_long = interpolacao.to_crs('EPSG: 4326')
+    # coordenada_lat_long = (
+    #     lat_long.geometry.x.iloc[0], lat_long.geometry.y.iloc[0])
+    # mapa_ssa = folium.Map(location=[coordenada_lat_long[0], coordenada_lat_long[1]],
+    #                     zoom_start=12,
+    #                     tiles='OpenStreetMap',
+    #                     name='Stamen')
+    # folium.Marker([coordenada_lat_long[0], coordenada_lat_long[1]],
+    #             popup=f'Localização Interpolada: {logradouro['Toponim']}, número {numero}').add_to(mapa_ssa)
+
+    # # salva o mapa em um arquivo HTML para visualização
+    # mapa_ssa.save('mapa_ssa.html')
+
+    # return coordenada_final
+
+# geometria setor fiscal + logradouro sedur medicao + interpolar/intersecção logradouro e setor fiscal
+# pegar a coordenada do imovel e interpolar o setor fiscal
+def setor_fiscal_correto(caminho_arquivo_log, caminho_arquivo_setor, nome_coluna_log, nome_coluna_nporta, coord_x, coord_y, nome_coluna_sfiscal, df):
+    # abrindo shapefiles (.shp) pelo caminho do arquivo
+    ssa_eixos = gpd.read_file(caminho_arquivo_log, crs='EPSG:31984')
+    ssa_setor_fiscal = gpd.read_file(caminho_arquivo_setor, crs='EPSG:31984')
+    resultados = []
+
+    # localizando logradouro
+    for index, row in df.iterrows():
+        print(f"Processando linha {index}...")
+        codlog = row[nome_coluna_log]
+
+        # convertendo para lat_long
+        logradouro = ssa_eixos[ssa_eixos['codlog'] == codlog]
+        logradouro = logradouro.to_crs('EPSG:4326')
+
+        if logradouro.empty:
+            print(f"Logradouro {codlog} não encontrado no shapefile.")
+            continue
+
+        # GDF em UTM
+        logradouro_utm = logradouro.to_crs('EPSG:31984')
+
+        # transformando distância nº porta compatível à unidade de medida do logradouro em metros
+        numero = row[nome_coluna_nporta]
+        distancia_em_metros = numero / 100000
+
+        if pd.notna(row.get(coord_x)) and pd.notna(row.get(coord_y)):
+            try:
+                # corrigindo o formato das coordenadas
+                coord_x_val = float(str(row[coord_x]).replace(',', '.'))
+                coord_y_val = float(str(row[coord_y]).replace(',', '.'))
+
+                # localizando o imóvel por coordenada
+                coordenada_existente = (coord_x_val, coord_y_val)
+                localizacao = pd.DataFrame([row])
+                localizacao['coordenadas'] = [Point(coordenada_existente)]
+                localizacao = gpd.GeoDataFrame(localizacao, geometry='coordenadas', crs='EPSG:31984')
+
+                # interseção entre ponto e polígono de setores fiscais
+                intersecao_coord_existente = gpd.sjoin(localizacao, ssa_setor_fiscal, how='inner', predicate='within')
+
+                if not intersecao_coord_existente.empty:
+                    setor_fiscal_encontrado = intersecao_coord_existente.iloc[0]['Name']
+                    setor_fiscal_original = row[nome_coluna_sfiscal]
+
+                    if setor_fiscal_original != setor_fiscal_encontrado:
+                        resultado_com_coord = pd.DataFrame([row])
+                        resultado_com_coord['setor_fiscal_novo'] = setor_fiscal_encontrado
+                        resultado_com_coord['analise_manual'] = 'nao'
+                        resultados.append(resultado_com_coord)
+            except (ValueError, IndexError) as e:
+                print(f"Erro ao processar coordenadas ou interseção: {e}")
+                continue
+
+        else:
+            if numero == 0:
+                # se não tiver nº de porta, verificar se o logradouro possui interseção com mais de um setor fiscal
+                intersecao_sem_n_porta = gpd.sjoin(logradouro, ssa_setor_fiscal, how='inner', predicate='within')
+                try:
+                    if not intersecao_sem_n_porta.empty:
+                        setores_encontrados = intersecao_sem_n_porta['Name'].unique()
+                        if len(setores_encontrados) > 1:
+                            print(f"Logradouro {codlog} possui interseção com mais de um setor fiscal. Análise manual necessária.")
+                            resultado_sem_coord = pd.DataFrame([row])
+                            resultado_com_coord['setor_fiscal_novo'] = ''
+                            resultado_sem_coord['analise_manual'] = 'sim (sem nº porta e com mais de 1 setor fiscal por logradouro)'
+                            resultados.append(resultado_sem_coord)
+                        else:
+                            setor_fiscal_encontrado = setores_encontrados[0]
+                            setor_fiscal_original = row[nome_coluna_sfiscal]
+                            if setor_fiscal_original != setor_fiscal_encontrado:
+                                resultado_sem_coord = pd.DataFrame([row])
+                                resultado_sem_coord['setor_fiscal_novo'] = setor_fiscal_encontrado
+                                resultado_sem_coord['analise_manual'] = 'nao'
+                                resultados.append(resultado_sem_coord)
+                except IndexError:
+                    continue
+                
+            else:
+                # interpolando a distância
+                interpolacao_utm = logradouro_utm.interpolate(distancia_em_metros)
+                if interpolacao_utm.empty:
+                    print(f"Número de porta maior que o comprimento do logradouro encontrado no shapefile.")
+                    continue
+                try:
+                    coordenada_final = (round(interpolacao_utm.geometry.x.iloc[0], 3), round(interpolacao_utm.geometry.y.iloc[0], 3))
+                    resultado_com_coord = pd.DataFrame([row])
+                    resultado_com_coord['geometry'] = [Point(coordenada_final)]
+                    resultado_com_coord = gpd.GeoDataFrame(resultado_com_coord, geometry='geometry', crs='EPSG:31984')
+                    # interseção com .shp de setor fiscal
+                    intersecao_com_n_porta = gpd.sjoin(resultado_com_coord, ssa_setor_fiscal, how='inner', predicate='within')
+                    if not intersecao_com_n_porta.empty:
+                        setor_fiscal_encontrado = intersecao_com_n_porta.iloc[0]['Name']
+                        setor_fiscal_original = row[nome_coluna_sfiscal]
+                        if setor_fiscal_original != setor_fiscal_encontrado:
+                            resultado_com_coord['setor_fiscal_novo'] = setor_fiscal_encontrado
+                            resultado_com_coord['analise_manual'] = 'sim (com nº porta e com mais de 1 setor fiscal por logradouro)'
+                            resultados.append(resultado_com_coord)
+                except IndexError:
+                    continue
+    # retornando resultados concatenados
+    if resultados:
+        return pd.concat(resultados, ignore_index=True)
+    else:
+        print("Nenhum resultado para concatenar.")
+        return pd.DataFrame()  # df vazio se não houver resultados
