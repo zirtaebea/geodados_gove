@@ -306,3 +306,154 @@ def setor_fiscal_correto(caminho_arquivo_log, caminho_arquivo_setor, nome_coluna
     else:
         print("Nenhum resultado para concatenar.")
         return pd.DataFrame()  # df vazio se não houver resultados
+
+
+# correçao de bairro
+def bairro_correcao(caminho_arquivo_log, caminho_arquivo_bairro, nome_coluna_log, nome_coluna_nporta, coord_x, coord_y, nome_coluna_bairro, df):
+    # shapes
+    ssa_eixos = gpd.read_file(caminho_arquivo_log, encoding='latin1')
+    ssa_bairros = gpd.read_file(caminho_arquivo_bairro)
+    
+    print(ssa_eixos.columns)
+
+
+    resultados = []
+
+    # localizando logradouro
+    for index, row in df.iterrows():
+        print(f"Processando linha {index}...")
+        codlog = row[nome_coluna_log]
+
+        # selecionando logradouro correspondente
+        logradouro = ssa_eixos[ssa_eixos['CÃ³digo _1'] == codlog]
+
+        if logradouro.empty:
+            print(f"Logradouro {codlog} não encontrado no shapefile.")
+            continue
+
+        # logradouro para UTM (EPSG:31984)
+        logradouro_utm = logradouro.to_crs('EPSG:31984')
+
+        # Distância com base no número de porta
+        numero = row[nome_coluna_nporta]
+        distancia_em_metros = pd.to_numeric(numero) / 100000  # Ajuste conforme a escala necessária
+
+
+        if pd.notna(row.get(coord_x)) and pd.notna(row.get(coord_y)):
+            try:
+                # corrigindo o formato das coordenadas
+                coord_x_val = float(str(row[coord_x]).replace(',', '.'))
+                coord_y_val = float(str(row[coord_y]).replace(',', '.'))
+
+                # criando GeoDataFrame a partir das coordenadas
+                localizacao = gpd.GeoDataFrame(df.iloc[[index]], geometry=gpd.points_from_xy([
+                                            coord_x_val], [coord_y_val]), crs='EPSG:31984')
+
+                # verificando interseção com bairros
+                intersecao_coord_existente = gpd.sjoin(
+                    localizacao, ssa_bairros, how='inner', predicate='intersects')
+
+                if not intersecao_coord_existente.empty:
+                    bairro_encontrado = intersecao_coord_existente.iloc[0]['Bairro']
+                    bairro_original = row[nome_coluna_bairro]
+
+                    if bairro_original != bairro_encontrado:
+                        resultado_com_coord = pd.DataFrame([row])
+                        resultado_com_coord['bairro_novo'] = bairro_encontrado
+                        resultado_com_coord['parametro'] = 'coordenada sedur'
+                        resultado_com_coord['conclusão'] = 'bairro pela coordenada'
+                        resultado_com_coord['analise_manual'] = 'sim'
+                        resultados.append(resultado_com_coord)
+
+            except (ValueError, IndexError) as e:
+                print(f"Erro ao processar coordenadas ou interseção: {e}")
+                continue
+
+        else:
+            if numero == 0:
+                # verificar se o logradouro possui interseção com mais de um bairro
+                intersecao_sem_n_porta = gpd.sjoin(
+                    logradouro, ssa_bairros, how='inner', predicate='intersects')
+
+                if not intersecao_sem_n_porta.empty:
+                    bairros_encontrados = intersecao_sem_n_porta['Bairro'].unique(
+                    )
+                    if len(bairros_encontrados) > 1:
+                        print(f"Logradouro {codlog} possui interseção com mais de um bairro. Análise manual necessária.")
+                        resultado_sem_coord = pd.DataFrame([row])
+                        resultado_sem_coord['bairro_novo'] = ''
+                        resultado_sem_coord['parametro'] = 'interseção logradouro x bairro'
+                        resultado_sem_coord['conclusão'] = 'logradouro com mais de 1 bairro. endereço sem nº de porta'
+                        resultado_sem_coord['analise_manual'] = 'sim'
+                        resultados.append(resultado_sem_coord)
+                    else:
+                        bairro_encontrado = bairros_encontrados[0]
+                        bairro_original = row[nome_coluna_bairro]
+                        if bairro_original != bairro_encontrado:
+                            resultado_sem_coord = pd.DataFrame([row])
+                            resultado_sem_coord['bairro_novo'] = bairro_encontrado
+                            resultado_sem_coord['parametro'] = 'interseção logradouro x bairro'
+                            resultado_sem_coord['conclusão'] = 'logradouro pertencente a apenas 1 bairro. endereço sem nº de porta'
+                            resultado_sem_coord['analise_manual'] = 'nao'
+                            resultados.append(resultado_sem_coord)
+
+            else:
+                # interpolando a distância para o número de porta
+                interpolacao_utm = logradouro_utm.interpolate(
+                    distancia_em_metros)
+                if interpolacao_utm.empty:
+                    print(
+                        f"Número de porta maior que o comprimento do logradouro encontrado no shapefile.")
+                    continue
+
+                try:
+                    # pegando a coordenada interpolada e criando GeoDataFrame
+                    coordenada_final = Point(
+                        interpolacao_utm.geometry.x.iloc[0], interpolacao_utm.geometry.y.iloc[0])
+                    resultado_com_coord = gpd.GeoDataFrame(
+                        [row], geometry=[coordenada_final], crs='EPSG:31984')
+
+                    # intersecao bairros com numero de porta
+                    intersecao_com_n_porta = gpd.sjoin(
+                        resultado_com_coord, ssa_bairros, how='inner', predicate='intersects')
+                    if not intersecao_com_n_porta.empty:
+                        bairro_encontrado = intersecao_com_n_porta.iloc[0]['Bairro']
+                        bairro_original = row[nome_coluna_bairro]
+
+                        if bairro_original != bairro_encontrado:
+                            resultado_com_coord['bairro_novo'] = bairro_encontrado
+                            resultado_com_coord['parametro'] = 'localização bairro pelo logradouro e nº de porta'
+                            resultado_com_coord['conclusão'] = 'bairro pelo endereço do imóvel'
+                            resultado_com_coord['analise_manual'] = 'nao'
+                            resultados.append(resultado_com_coord)
+
+                except IndexError:
+                    continue
+
+    # retornando os resultados concatenados
+    if resultados:
+        return pd.concat(resultados, ignore_index=True)
+    else:
+        print("Nenhum resultado para concatenar.")
+        return pd.DataFrame()  # Retorna DataFrame vazio
+
+
+def dados_inscricoes_banco_enriquecimento(conn, ficha):
+    try:
+        query = """
+            select ide_cadastro, cod_log_destinatario_enriquecido, nom_logradouro_match, 
+            num_imovel_destinatario_enriquecido, nom_bairro_destinatario_enriquecido, 
+            coordenada_geo_x_enriquecido, 
+            coordenada_geo_y_enriquecido
+            from salvador.enriquecimentos e 
+            where e.ficha = %s 
+            order by e.ide_cadastro asc
+        """
+
+        with conn.cursor() as cur:
+            cur.execute(query, (ficha,))  # ficha é passado como tupla
+            cadastros = cur.fetchall()
+            return cadastros
+    except Exception as e:
+        print(f"Erro ao obter cadastros: {e}")
+        return []
