@@ -2,9 +2,9 @@ import psycopg2
 import pandas as pd
 from collections import Counter
 
+
+
 # funcion conexão db
-
-
 def criar_conexao():
     try:
         conn = psycopg2.connect(
@@ -17,6 +17,7 @@ def criar_conexao():
     except Exception as e:
         print(f"Erro ao conectar ao banco de dados: {e}")
         return None
+
 
 
 # function para pegar intervalo de inscrições ativas do mesmo conjunto
@@ -87,6 +88,8 @@ def intervalo_ativas_verticais(conn, cod_cliente, des_origem, cod_cadastro):
         return pd.DataFrame(), pd.DataFrame()
 
 
+
+
 # function para definir moda do padrão construtivo
 def moda_padrao_construtivo(df_intervalo, inscricao):
     # primeiros 5 dígitos da inscrição fornecida (ou menos)
@@ -105,9 +108,11 @@ def moda_padrao_construtivo(df_intervalo, inscricao):
         return None  # retorna nane se não tiver nenhuma correspondência
 
 
+
+
 # function para armazenar moda do padrão construtivo das inscrições do conjunto
 def criar_df_com_moda(df_intervalo, inscricoes):
-    # Lista para armazenar os resultados
+    # armazenar os resultados
     resultados = []
 
     # calcula a moda para cada inscrição
@@ -115,6 +120,6 @@ def criar_df_com_moda(df_intervalo, inscricoes):
         moda = moda_padrao_construtivo(df_intervalo, inscricao)
         resultados.append({'inscricao': inscricao, 'moda': moda})
 
-    # resultados em DataFrame
+    # resultados em df
     df_resultado = pd.DataFrame(resultados)
     return df_resultado
